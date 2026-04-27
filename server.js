@@ -10,8 +10,12 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const PORT = 5000;
-const JWT_SECRET = "secret";
+const PORT = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || "secret";
+
+// 🔥 URL BASE (Render o local)
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 const AUDIO_DIR = path.join(UPLOADS_DIR, "audio");
 const IMAGES_DIR = path.join(UPLOADS_DIR, "images");
@@ -23,7 +27,8 @@ app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-mongoose.connect("mongodb://127.0.0.1:27017/sello")
+// 🔥 MONGODB (Atlas)
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("Mongo conectado"))
   .catch((err) => console.log("Error conectando Mongo:", err.message));
 
@@ -94,7 +99,7 @@ const upload = multer({ storage });
 
 function publicUploadUrl(filePath) {
   const relative = path.relative(__dirname, filePath).replace(/\\/g, "/");
-  return `http://localhost:${PORT}/${relative}`;
+  return `${BASE_URL}/${relative}`;
 }
 
 function normalizeAssetUrl(value, folder) {
@@ -104,9 +109,7 @@ function normalizeAssetUrl(value, folder) {
 
   try {
     clean = decodeURIComponent(clean);
-  } catch {
-    // Si Mongo tiene un caracter raro en la URL vieja, seguimos con el valor original.
-  }
+  } catch {}
 
   const timestampFile = clean.match(/(\d{10,}-.+)$/);
   const fileName = timestampFile
@@ -115,7 +118,7 @@ function normalizeAssetUrl(value, folder) {
 
   if (!fileName || fileName === "." || fileName === "/") return value;
 
-  return `http://localhost:${PORT}/uploads/${folder}/${fileName}`;
+  return `${BASE_URL}/uploads/${folder}/${fileName}`;
 }
 
 function beatResponse(beat) {
@@ -175,6 +178,7 @@ app.get("/all-beats", verificarToken, async (req, res) => {
   const beats = await Beat.find().sort({ _id: -1 });
   res.json(beats.map(beatResponse));
 });
+
 app.get("/admin/beats", verificarToken, soloAdmin, async (req, res) => {
   const beats = await Beat.find({ available: true, assigned: false }).sort({ _id: -1 });
   res.json(beats.map(beatResponse));
@@ -191,6 +195,7 @@ app.post("/beats/take/:id", verificarToken, async (req, res) => {
     const email = String(req.body.email || "").trim();
     if (!name) return res.status(400).send("Falta el nombre del productor");
     if (!email) return res.status(400).send("Falta el correo del productor");
+
     const takerUser = await User.findById(req.user.id);
 
     const beat = await Beat.findOneAndUpdate(
@@ -253,30 +258,11 @@ app.delete("/beats/:id", verificarToken, async (req, res) => {
     const beat = await Beat.findById(req.params.id);
     if (!beat) return res.status(404).send("No encontrado");
 
-    // Permitir eliminación si es el propietario o un admin
     if (String(beat.userId) !== String(req.user.id)) {
       const user = await User.findById(req.user.id);
       if (!user || user.role !== "admin") {
         return res.status(403).send("No autorizado");
       }
-    }
-
-    // Intentar borrar archivos asociados (audio + cover) del disco
-    try {
-      const audioName = beat.fileUrl ? path.posix.basename(beat.fileUrl) : null;
-      const coverName = beat.coverUrl ? path.posix.basename(beat.coverUrl) : null;
-
-      if (audioName) {
-        const audioPath = path.join(AUDIO_DIR, audioName);
-        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-      }
-
-      if (coverName && !coverName.startsWith("http")) {
-        const coverPath = path.join(IMAGES_DIR, coverName);
-        if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
-      }
-    } catch (e) {
-      console.log("Error removiendo archivos del beat:", e.message);
     }
 
     await Beat.findByIdAndDelete(req.params.id);
@@ -292,26 +278,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Go Beats backend en http://localhost:${PORT}`);
+  console.log(`Servidor corriendo en ${BASE_URL}`);
 });
-app.get("/my-beats", verificarToken, async (req, res) => {
-  try {
-    const beats = await Beat.find({ userId: req.user.id }).sort({ _id: -1 });
-    res.json(beats.map(beatResponse));
-  } catch (err) {
-    console.log(err);
-    res.status(500).send("Error");
-  }
-});
-app.get("/mis-beats/:userId", async (req, res) => {
-  try {
-    const beats = await Beat.find({ userId: req.params.userId });
-    res.json(beats);
-  } catch (error) {
-    res.status(500).json({ error: "Error al obtener beats" });
-  }
-});
-
-
-
-
