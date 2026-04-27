@@ -280,3 +280,11 @@ app.get("/", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en ${BASE_URL}`);
 });
+app.get("/my-beats", verificarToken, async (req, res) => {
+  try {
+    const beats = await Beat.find({ userId: req.user.id }).sort({ _id: -1 });
+    res.json(beats.map(beatResponse));
+  } catch (err) {
+    res.status(500).send("Error obteniendo tus beats");
+  }
+});
