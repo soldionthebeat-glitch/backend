@@ -273,6 +273,31 @@ app.delete("/beats/:id", verificarToken, async (req, res) => {
   }
 });
 
+app.delete("/admin/users/delete", verificarToken, soloAdmin, async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email) return res.status(400).send("Email es requerido");
+
+    const result = await User.findOneAndDelete({ email });
+    if (!result) return res.status(404).send("Usuario no encontrado");
+
+    res.json({ message: `Usuario ${email} ha sido eliminado`, deletedUser: email });
+  } catch (err) {
+    console.log(err);
+    res.status(500).send("Error eliminando usuario");
+  }
+});
+
+app.delete("/admin/users/all", verificarToken, soloAdmin, async (req, res) => {
+  try {
+    const result = await User.deleteMany({});
+    res.json({ message: "Todos los usuarios han sido eliminados", deletedCount: result.deletedCount });
+  } catch (err) {
+    console.log(err);
+    res.status(500).send("Error eliminando usuarios");
+  }
+});
+
 app.get("/", (req, res) => {
   res.send("Go Beats backend funcionando");
 });
