@@ -35,7 +35,12 @@ mongoose.connect(process.env.MONGO_URI)
 const User = mongoose.model("User", {
   email: String,
   password: String,
-  role: { type: String, default: "user" }
+  role: { type: String, default: "user" },
+  producerName: String,
+  profilePhotoUrl: String,
+  instagram: String,
+  description: String,
+  resume: String
 });
 
 const Beat = mongoose.model("Beat", {
@@ -44,6 +49,8 @@ const Beat = mongoose.model("Beat", {
   bpm: Number,
   genre: String,
   mood: String,
+  artistReference: String,
+  labelPick: { type: Boolean, default: false },
   key: String,
   fileUrl: String,
   coverUrl: String,
@@ -69,6 +76,24 @@ function verificarToken(req, res, next) {
   } catch {
     return res.status(401).send("Token invalido");
   }
+}
+
+function tokenOpcional(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token || token === "null" || token === "undefined") {
+    req.user = null;
+    return next();
+  }
+
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+  } catch {
+    req.user = null;
+  }
+
+  next();
 }
 
 async function soloAdmin(req, res, next) {
@@ -166,8 +191,51 @@ app.get("/me", verificarToken, async (req, res) => {
   const user = await User.findById(req.user.id);
   if (!user) return res.status(401).send("Usuario no existe");
 
-  res.json({ email: user.email, role: user.role });
+  res.json({
+    email: user.email,
+    role: user.role,
+    producerName: user.producerName || "",
+    profilePhotoUrl: normalizeAssetUrl(user.profilePhotoUrl, "images") || "",
+    instagram: user.instagram || "",
+    description: user.description || "",
+    resume: user.resume || ""
+  });
 });
+
+app.put("/me/profile",
+  verificarToken,
+  upload.single("profilePhoto"),
+  async (req, res) => {
+    try {
+      const update = {
+        producerName: String(req.body.producerName || "").trim(),
+        instagram: String(req.body.instagram || "").trim(),
+        description: String(req.body.description || "").trim(),
+        resume: String(req.body.resume || "").trim()
+      };
+
+      if (req.file) {
+        update.profilePhotoUrl = publicUploadUrl(req.file.path);
+      }
+
+      const user = await User.findByIdAndUpdate(req.user.id, update, { new: true });
+      if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+      res.json({
+        email: user.email,
+        role: user.role,
+        producerName: user.producerName || "",
+        profilePhotoUrl: normalizeAssetUrl(user.profilePhotoUrl, "images") || "",
+        instagram: user.instagram || "",
+        description: user.description || "",
+        resume: user.resume || ""
+      });
+    } catch (err) {
+      console.log(err);
+      res.status(500).json({ message: "Error actualizando perfil" });
+    }
+  }
+);
 
 app.get("/beats", async (req, res) => {
   const beats = await Beat.find({ available: true, assigned: false }).sort({ _id: -1 });
@@ -189,14 +257,14 @@ app.get("/admin/descargas", verificarToken, soloAdmin, async (req, res) => {
   res.json(beats.map(beatResponse));
 });
 
-app.post("/beats/take/:id", verificarToken, async (req, res) => {
+app.post("/beats/take/:id", tokenOpcional, async (req, res) => {
   try {
     const name = String(req.body.name || "").trim();
     const email = String(req.body.email || "").trim();
-    if (!name) return res.status(400).send("Falta el nombre del productor");
-    if (!email) return res.status(400).send("Falta el correo del productor");
+    if (!name) return res.status(400).json({ message: "Falta el nombre del productor" });
+    if (!email) return res.status(400).json({ message: "Falta el correo del productor" });
 
-    const takerUser = await User.findById(req.user.id);
+    const takerUser = req.user ? await User.findById(req.user.id) : null;
 
     const beat = await Beat.findOneAndUpdate(
       { _id: req.params.id, assigned: false },
@@ -211,11 +279,11 @@ app.post("/beats/take/:id", verificarToken, async (req, res) => {
       { new: true }
     );
 
-    if (!beat) return res.status(404).send("Beat no disponible");
+    if (!beat) return res.status(404).json({ message: "Beat no disponible" });
     res.json(beatResponse(beat));
   } catch (err) {
     console.log(err);
-    res.status(500).send("Error tomando beat");
+    res.status(500).json({ message: "Error tomando beat" });
   }
 });
 
@@ -238,6 +306,8 @@ app.post("/upload-beat",
         bpm: req.body.bpm,
         genre: req.body.genre,
         mood: req.body.mood,
+        artistReference: req.body.artistReference,
+        labelPick: req.body.labelPick === "true" || req.body.labelPick === "on",
         key: req.body.key,
         fileUrl: publicUploadUrl(audio.path),
         coverUrl: cover ? publicUploadUrl(cover.path) : "https://via.placeholder.com/600",
