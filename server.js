@@ -27,11 +27,6 @@ app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// 🔥 MONGODB (Atlas)
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("Mongo conectado"))
-  .catch((err) => console.log("Error conectando Mongo:", err.message));
-
 const User = mongoose.model("User", {
   email: String,
   password: String,
@@ -372,9 +367,6 @@ app.get("/", (req, res) => {
   res.send("Go Beats backend funcionando");
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en ${BASE_URL}`);
-});
 app.get("/my-beats", verificarToken, async (req, res) => {
   try {
     const beats = await Beat.find({ userId: req.user.id }).sort({ _id: -1 });
@@ -383,3 +375,16 @@ app.get("/my-beats", verificarToken, async (req, res) => {
     res.status(500).send("Error obteniendo tus beats");
   }
 });
+
+// 🔥 MONGODB (Atlas)
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log("Mongo conectado");
+
+    app.listen(PORT, () => {
+      console.log(`Servidor corriendo en ${BASE_URL}`);
+    });
+  })
+  .catch((err) => {
+    console.log("Error conectando Mongo:", err.message);
+  });

@@ -1,4 +1,8 @@
-﻿const API_OBTENER_URL = window.API_URL || "http://localhost:5000";
+﻿const API_OBTENER_URL = window.API_URL || (
+  ["localhost", "127.0.0.1"].includes(window.location.hostname) || window.location.protocol === "file:"
+    ? "http://localhost:5000"
+    : "https://backend-j3sk.onrender.com"
+);
 
 class ModalObtener {
   constructor() {
@@ -229,4 +233,6 @@ document.addEventListener("click", (event) => {
     fileUrl: btn.dataset.beatFile || ""
   });
 });
+
+
 
