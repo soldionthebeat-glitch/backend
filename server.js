@@ -295,6 +295,8 @@ app.post("/upload-beat",
 
       if (!audio) return res.status(400).send("Falta el audio");
 
+      const currentUser = req.user ? await User.findById(req.user.id) : null;
+
       const beat = new Beat({
         name: req.body.name,
         producer: req.body.producer || "Unknown",
@@ -302,7 +304,7 @@ app.post("/upload-beat",
         genre: req.body.genre,
         mood: req.body.mood,
         artistReference: req.body.artistReference,
-        labelPick: req.body.labelPick === "true" || req.body.labelPick === "on",
+        labelPick: currentUser?.role === "admin" && (req.body.labelPick === "true" || req.body.labelPick === "on"),
         key: req.body.key,
         fileUrl: publicUploadUrl(audio.path),
         coverUrl: cover ? publicUploadUrl(cover.path) : "https://via.placeholder.com/600",
@@ -335,6 +337,26 @@ app.delete("/beats/:id", verificarToken, async (req, res) => {
   } catch (err) {
     console.log(err);
     res.status(500).send("Error eliminando");
+  }
+});
+
+app.patch("/admin/beats/:id/sections", verificarToken, soloAdmin, async (req, res) => {
+  try {
+    const update = {
+      genre: String(req.body.genre || "").trim(),
+      mood: String(req.body.mood || "").trim(),
+      producer: String(req.body.producer || "").trim(),
+      artistReference: String(req.body.artistReference || "").trim(),
+      labelPick: req.body.labelPick === true || req.body.labelPick === "true" || req.body.labelPick === "on"
+    };
+
+    const beat = await Beat.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!beat) return res.status(404).json({ message: "Beat no encontrado" });
+
+    res.json(beatResponse(beat));
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ message: "Error actualizando secciones" });
   }
 });
 
