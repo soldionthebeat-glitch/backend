@@ -273,7 +273,7 @@ app.post("/beats/take/:id", tokenOpcional, async (req, res) => {
         available: false,
         assignedTo: name,
         assignedEmail: email,
-        assignedBy: takerUser ? takerUser.email : req.user.id,
+        assignedBy: takerUser ? takerUser.email : email,
         assignedAt: new Date()
       },
       { new: true }
