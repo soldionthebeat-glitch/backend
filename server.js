@@ -307,7 +307,6 @@ app.get("/referrals/:code/beats", async (req, res) => {
     if (!producer) return res.status(404).json({ message: "Referido no encontrado" });
 
     const beats = await Beat.find({
-      userId: String(producer._id),
       available: true,
       assigned: false,
       hidden: { $ne: true }
