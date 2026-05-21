@@ -41,6 +41,7 @@ const User = mongoose.model("User", {
 
 const Beat = mongoose.model("Beat", {
   name: String,
+  catalogName: String,
   producer: String,
   bpm: Number,
   genre: String,
@@ -360,21 +361,68 @@ app.post("/beats/take/:id", tokenOpcional, async (req, res) => {
 
 app.post("/upload-beat",
   verificarToken,
-  upload.fields([
-    { name: "audio", maxCount: 1 },
-    { name: "cover", maxCount: 1 }
-  ]),
+  upload.any(),
   async (req, res) => {
     try {
-      const audio = req.files.audio?.[0];
-      const cover = req.files.cover?.[0];
+      const files = req.files || [];
+      const audio = files.find((file) => file.fieldname === "audio");
+      const cover = files.find((file) => file.fieldname === "cover" || file.fieldname === "catalogCover");
+
+      const currentUser = req.user ? await User.findById(req.user.id) : null;
+      const catalogName = String(req.body.catalogName || "").trim();
+      const catalogCover = files.find((file) => file.fieldname === "catalogCover") || cover;
+      const indexedAudios = files
+        .map((file) => {
+          const match = file.fieldname.match(/^audio_(\d+)$/);
+          return match ? { index: Number(match[1]), file } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.index - b.index);
+
+      if (indexedAudios.length > 30) {
+        return res.status(400).send("Puedes subir como maximo 30 beats por catalogo");
+      }
+
+      if (indexedAudios.length) {
+        if (!catalogName) return res.status(400).send("Falta el nombre del catalogo");
+        if (!catalogCover) return res.status(400).send("Falta la portada del catalogo");
+
+        const beatsToCreate = indexedAudios.map(({ index, file }) => {
+          const name = String(req.body[`beats[${index}][name]`] || "").trim();
+          const bpm = String(req.body[`beats[${index}][bpm]`] || "").trim();
+          const key = String(req.body[`beats[${index}][key]`] || "").trim();
+          const genre = String(req.body[`beats[${index}][genre]`] || "").trim();
+          const mood = String(req.body[`beats[${index}][mood]`] || "").trim();
+
+          if (!name || !bpm || !key || !genre || !mood) {
+            throw new Error(`Completa nombre, BPM, nota tonica, genero y sentimiento del beat ${index + 1}`);
+          }
+
+          return {
+            name,
+            catalogName,
+            producer: req.body.producer || currentUser?.producerName || "Unknown",
+            bpm,
+            genre,
+            mood,
+            artistReference: String(req.body[`beats[${index}][artistReference]`] || "").trim(),
+            labelPick: currentUser?.role === "admin" && (req.body[`beats[${index}][labelPick]`] === "true" || req.body[`beats[${index}][labelPick]`] === "on"),
+            key,
+            fileUrl: publicUploadUrl(file.path),
+            coverUrl: publicUploadUrl(catalogCover.path),
+            userId: req.user ? req.user.id : undefined
+          };
+        });
+
+        await Beat.insertMany(beatsToCreate);
+        return res.send(`${beatsToCreate.length} beats subidos correctamente al catalogo`);
+      }
 
       if (!audio) return res.status(400).send("Falta el audio");
 
-      const currentUser = req.user ? await User.findById(req.user.id) : null;
-
       const beat = new Beat({
         name: req.body.name,
+        catalogName,
         producer: req.body.producer || "Unknown",
         bpm: req.body.bpm,
         genre: req.body.genre,
@@ -391,6 +439,9 @@ app.post("/upload-beat",
       res.send("Beat subido correctamente");
     } catch (err) {
       console.log(err);
+      if (err.message && err.message.startsWith("Completa ")) {
+        return res.status(400).send(err.message);
+      }
       res.status(500).send("Error subiendo beat");
     }
   }
