@@ -35,7 +35,8 @@ const User = mongoose.model("User", {
   profilePhotoUrl: String,
   instagram: String,
   description: String,
-  resume: String
+  resume: String,
+  referralCode: String
 });
 
 const Beat = mongoose.model("Beat", {
@@ -55,8 +56,37 @@ const Beat = mongoose.model("Beat", {
   assignedTo: String,
   assignedEmail: String,
   assignedBy: String,
-  assignedAt: Date
+  assignedAt: Date,
+  hidden: { type: Boolean, default: false },
+  hiddenAt: Date,
+  hiddenBy: String
 });
+
+function createReferralCode() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+async function ensureReferralCode(user) {
+  if (!user) return "";
+  if (user.referralCode) return user.referralCode;
+
+  let code = createReferralCode();
+  while (await User.findOne({ referralCode: code })) {
+    code = createReferralCode();
+  }
+
+  user.referralCode = code;
+  await user.save();
+  return code;
+}
+
+async function ensureUniqueReferralCode() {
+  let code = createReferralCode();
+  while (await User.findOne({ referralCode: code })) {
+    code = createReferralCode();
+  }
+  return code;
+}
 
 function verificarToken(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -141,13 +171,25 @@ function normalizeAssetUrl(value, folder) {
   return `${BASE_URL}/uploads/${folder}/${fileName}`;
 }
 
-function beatResponse(beat) {
+function beatResponse(beat, producerUser) {
   const plain = beat.toObject ? beat.toObject() : beat;
+  const producerPlain = producerUser?.toObject ? producerUser.toObject() : producerUser;
+
   return {
     ...plain,
     fileUrl: normalizeAssetUrl(plain.fileUrl, "audio"),
-    coverUrl: normalizeAssetUrl(plain.coverUrl, "images")
+    coverUrl: normalizeAssetUrl(plain.coverUrl, "images"),
+    producerProfilePhotoUrl: normalizeAssetUrl(producerPlain?.profilePhotoUrl, "images") || "",
+    producerProfileName: producerPlain?.producerName || plain.producer || "Productor",
+    producerInstagram: producerPlain?.instagram || ""
   };
+}
+
+async function beatsResponse(beats) {
+  const ids = [...new Set(beats.map((beat) => String(beat.userId || "")).filter(Boolean))];
+  const users = ids.length ? await User.find({ _id: { $in: ids } }) : [];
+  const usersById = new Map(users.map((user) => [String(user._id), user]));
+  return beats.map((beat) => beatResponse(beat, usersById.get(String(beat.userId || ""))));
 }
 
 app.post("/register", async (req, res) => {
@@ -164,7 +206,8 @@ app.post("/register", async (req, res) => {
   const user = new User({
     email,
     password: hashed,
-    role: role === "admin" ? "admin" : "user"
+    role: role === "admin" ? "admin" : "user",
+    referralCode: await ensureUniqueReferralCode()
   });
 
   await user.save();
@@ -185,6 +228,7 @@ app.post("/login", async (req, res) => {
 app.get("/me", verificarToken, async (req, res) => {
   const user = await User.findById(req.user.id);
   if (!user) return res.status(401).send("Usuario no existe");
+  const referralCode = await ensureReferralCode(user);
 
   res.json({
     email: user.email,
@@ -193,7 +237,8 @@ app.get("/me", verificarToken, async (req, res) => {
     profilePhotoUrl: normalizeAssetUrl(user.profilePhotoUrl, "images") || "",
     instagram: user.instagram || "",
     description: user.description || "",
-    resume: user.resume || ""
+    resume: user.resume || "",
+    referralCode
   });
 });
 
@@ -223,7 +268,8 @@ app.put("/me/profile",
         profilePhotoUrl: normalizeAssetUrl(user.profilePhotoUrl, "images") || "",
         instagram: user.instagram || "",
         description: user.description || "",
-        resume: user.resume || ""
+        resume: user.resume || "",
+        referralCode: await ensureReferralCode(user)
       });
     } catch (err) {
       console.log(err);
@@ -233,23 +279,54 @@ app.put("/me/profile",
 );
 
 app.get("/beats", async (req, res) => {
-  const beats = await Beat.find({ available: true, assigned: false }).sort({ _id: -1 });
-  res.json(beats.map(beatResponse));
+  const beats = await Beat.find({ available: true, assigned: false, hidden: { $ne: true } }).sort({ _id: -1 });
+  res.json(await beatsResponse(beats));
 });
 
 app.get("/all-beats", verificarToken, async (req, res) => {
-  const beats = await Beat.find().sort({ _id: -1 });
-  res.json(beats.map(beatResponse));
+  const user = await User.findById(req.user.id);
+  const query = user?.role === "admin" ? {} : { hidden: { $ne: true } };
+  const beats = await Beat.find(query).sort({ _id: -1 });
+  res.json(await beatsResponse(beats));
 });
 
 app.get("/admin/beats", verificarToken, soloAdmin, async (req, res) => {
   const beats = await Beat.find({ available: true, assigned: false }).sort({ _id: -1 });
-  res.json(beats.map(beatResponse));
+  res.json(await beatsResponse(beats));
 });
 
 app.get("/admin/descargas", verificarToken, soloAdmin, async (req, res) => {
   const beats = await Beat.find({ assigned: true }).sort({ assignedAt: -1, _id: -1 });
-  res.json(beats.map(beatResponse));
+  res.json(await beatsResponse(beats));
+});
+
+app.get("/referrals/:code/beats", async (req, res) => {
+  try {
+    const code = String(req.params.code || "").trim().toUpperCase();
+    const producer = await User.findOne({ referralCode: code });
+    if (!producer) return res.status(404).json({ message: "Referido no encontrado" });
+
+    const beats = await Beat.find({
+      userId: String(producer._id),
+      available: true,
+      assigned: false,
+      hidden: { $ne: true }
+    }).sort({ _id: -1 });
+
+    res.json({
+      producer: {
+        producerName: producer.producerName || producer.email,
+        profilePhotoUrl: normalizeAssetUrl(producer.profilePhotoUrl, "images") || "",
+        instagram: producer.instagram || "",
+        description: producer.description || "",
+        referralCode: producer.referralCode
+      },
+      beats: await beatsResponse(beats)
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ message: "Error cargando referido" });
+  }
 });
 
 app.post("/beats/take/:id", tokenOpcional, async (req, res) => {
@@ -275,7 +352,7 @@ app.post("/beats/take/:id", tokenOpcional, async (req, res) => {
     );
 
     if (!beat) return res.status(404).json({ message: "Beat no disponible" });
-    res.json(beatResponse(beat));
+    res.json(beatResponse(beat, beat.userId ? await User.findById(beat.userId) : null));
   } catch (err) {
     console.log(err);
     res.status(500).json({ message: "Error tomando beat" });
@@ -324,12 +401,21 @@ app.delete("/beats/:id", verificarToken, async (req, res) => {
   try {
     const beat = await Beat.findById(req.params.id);
     if (!beat) return res.status(404).send("No encontrado");
+    const user = await User.findById(req.user.id);
 
     if (String(beat.userId) !== String(req.user.id)) {
-      const user = await User.findById(req.user.id);
       if (!user || user.role !== "admin") {
         return res.status(403).send("No autorizado");
       }
+    }
+
+    if (user?.role === "admin") {
+      beat.hidden = true;
+      beat.available = false;
+      beat.hiddenAt = new Date();
+      beat.hiddenBy = user.email;
+      await beat.save();
+      return res.send("Beat ocultado");
     }
 
     await Beat.findByIdAndDelete(req.params.id);
@@ -391,8 +477,8 @@ app.get("/", (req, res) => {
 
 app.get("/my-beats", verificarToken, async (req, res) => {
   try {
-    const beats = await Beat.find({ userId: req.user.id }).sort({ _id: -1 });
-    res.json(beats.map(beatResponse));
+    const beats = await Beat.find({ userId: req.user.id, hidden: { $ne: true } }).sort({ _id: -1 });
+    res.json(await beatsResponse(beats));
   } catch (err) {
     res.status(500).send("Error obteniendo tus beats");
   }
